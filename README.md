@@ -1,3 +1,8 @@
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
+![GitHub last commit](https://img.shields.io/github/last-commit/Neox-theCreator/organizador-downloads)
+
+
 # 📁 Organizador de Downloads
 
 Script em Python que organiza automaticamente sua pasta de Downloads (ou qualquer outra) movendo arquivos para pastas baseadas na extensão.
