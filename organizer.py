@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
 """
 Organizador de Downloads - Move arquivos para pastas baseado na extensão.
-Autor: Seu Nome
-GitHub: https://github.com/seuusuario/organizador-downloads
+Autor: Neox-theCreator
+GitHub: https://github.com/Neox-theCreator/organizador-downloads
 """
 
 import os
 import shutil
 import json
 import argparse
+import hashlib
+import platform
 from pathlib import Path
 from datetime import datetime
+
+# Tentar importar send2trash (opcional)
+try:
+    import send2trash
+
+    SEND2TRASH_AVAILABLE = True
+except ImportError:
+    SEND2TRASH_AVAILABLE = False
+    print("💡 Dica: Instale 'send2trash' para mover para lixeira: pip install send2trash")
+
+# Tentar importar plyer para notificações (opcional)
+try:
+    from plyer import notification
+
+    PLYER_AVAILABLE = True
+except ImportError:
+    PLYER_AVAILABLE = False
+    print("💡 Dica: Instale 'plyer' para notificações: pip install plyer")
 
 
 class OrganizadorDownloads:
@@ -22,6 +42,8 @@ class OrganizadorDownloads:
         self.pastas_ignorar = self.config['pastas_ignorar']
         self.arquivos_movidos = []  # Para registrar para possível undo
         self.log_file = "organizador_log.json"
+        self.quiet = False  # Modo silencioso
+        self.estatisticas = {}  # Contador por pasta
 
     def obter_pasta_destino(self, extensao):
         """Retorna qual pasta deve receber o arquivo baseado na extensão"""
@@ -31,27 +53,92 @@ class OrganizadorDownloads:
                 return pasta
         return "Outros"  # Se não encontrou nenhuma categoria
 
-    def organizar(self, caminho_pasta, dry_run=False, mover_para_lixeira=False):
+    def _calcular_hash_md5(self, arquivo, primeiros_kb=1024):
+        """Calcula hash MD5 dos primeiros N KB para detectar duplicatas rapidamente"""
+        hash_md5 = hashlib.md5()
+        try:
+            with open(arquivo, 'rb') as f:
+                # Lê apenas os primeiros KB para performance
+                chunk = f.read(primeiros_kb * 1024)
+                hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except (IOError, OSError):
+            return None
+
+    def _verificar_duplicata(self, destino_path, nome_arquivo, hash_original):
+        """Verifica se já existe arquivo com mesmo nome e mesmo conteúdo"""
+        caminho_completo = destino_path / nome_arquivo
+        if caminho_completo.exists():
+            # Se tem o mesmo nome, verifica hash
+            hash_existente = self._calcular_hash_md5(caminho_completo)
+            if hash_existente == hash_original:
+                return True  # É duplicata exata
+        return False
+
+    def _nome_com_data(self, arquivo):
+        """Adiciona data de modificação ao nome do arquivo (opcional)"""
+        data_mod = datetime.fromtimestamp(arquivo.stat().st_mtime).strftime("%Y-%m-%d")
+        nome_base = arquivo.stem
+        extensao = arquivo.suffix
+        return f"{data_mod}_{nome_base}{extensao}"
+
+    def _notificar(self, mensagem, titulo="Organizador de Downloads"):
+        """Envia notificação do sistema (opcional)"""
+        if not PLYER_AVAILABLE:
+            return
+
+        sistema = platform.system()
+        try:
+            if sistema == "Windows":
+                notification.notify(
+                    title=titulo,
+                    message=mensagem,
+                    timeout=5
+                )
+            elif sistema == "Darwin":  # macOS
+                os.system(f"osascript -e 'display notification \"{mensagem}\" with title \"{titulo}\"'")
+            elif sistema == "Linux":
+                os.system(f'notify-send "{titulo}" "{mensagem}"')
+        except Exception:
+            pass  # Falha na notificação não quebra o programa
+
+    def _contar_arquivos_por_pasta(self):
+        """Conta quantos arquivos foram para cada pasta"""
+        stats = {}
+        for item in self.arquivos_movidos:
+            pasta = Path(item['destino']).parent.name
+            stats[pasta] = stats.get(pasta, 0) + 1
+        return stats
+
+    def organizar(self, caminho_pasta, dry_run=False, mover_para_lixeira=False, usar_data=False, quiet=False):
         """
         Organiza os arquivos da pasta especificada.
         dry_run: apenas mostra o que seria feito, não move nada
+        mover_para_lixeira: move para lixeira ao invés de organizar
+        usar_data: adiciona data no nome do arquivo
+        quiet: modo silencioso (sem prints)
         """
         caminho = Path(caminho_pasta)
+        self.quiet = quiet
 
         if not caminho.exists():
-            print(f"❌ Erro: A pasta '{caminho_pasta}' não existe!")
+            if not self.quiet:
+                print(f"❌ Erro: A pasta '{caminho_pasta}' não existe!")
             return
 
-        print(f"\n📂 Organizando: {caminho.absolute()}")
-        print("=" * 50)
+        if not self.quiet:
+            print(f"\n📂 Organizando: {caminho.absolute()}")
+            print("=" * 50)
 
         if dry_run:
-            print("🔍 [MODO SIMULAÇÃO] - Nenhum arquivo será movido\n")
+            if not self.quiet:
+                print("🔍 [MODO SIMULAÇÃO] - Nenhum arquivo será movido\n")
 
         arquivos = [f for f in caminho.iterdir() if f.is_file()]
 
         if not arquivos:
-            print("✅ Nenhum arquivo para organizar!")
+            if not self.quiet:
+                print("✅ Nenhum arquivo para organizar!")
             return
 
         for arquivo in arquivos:
@@ -70,33 +157,71 @@ class OrganizadorDownloads:
                 if not dry_run:
                     destino_path.mkdir(exist_ok=True)
 
-            novo_caminho = destino_path / arquivo.name
+            # Nome do arquivo (com ou sem data)
+            if usar_data and not dry_run:
+                nome_arquivo = self._nome_com_data(arquivo)
+            else:
+                nome_arquivo = arquivo.name
 
-            # Verificar se já existe arquivo com mesmo nome
-            if novo_caminho.exists():
-                nome_base = arquivo.stem
-                contador = 1
-                while novo_caminho.exists():
-                    novo_nome = f"{nome_base}_{contador}{extensao}"
-                    novo_caminho = destino_path / novo_nome
-                    contador += 1
+            # Verificar duplicata
+            hash_arquivo = self._calcular_hash_md5(arquivo)
+            if hash_arquivo and self._verificar_duplicata(destino_path, nome_arquivo, hash_arquivo):
+                if not self.quiet:
+                    print(f"⏭️  {arquivo.name} → DUPLICATA (já existe em {destino_pasta}/)")
+                continue
 
-            print(f"📄 {arquivo.name} → {destino_pasta}/")
+            novo_caminho = destino_path / nome_arquivo
+
+            # Verificar se já existe arquivo com mesmo nome (mas conteúdo diferente)
+            contador = 1
+            while novo_caminho.exists():
+                nome_base = Path(nome_arquivo).stem
+                extensao_original = Path(nome_arquivo).suffix
+                novo_nome = f"{nome_base}_{contador}{extensao_original}"
+                novo_caminho = destino_path / novo_nome
+                contador += 1
+
+            if not self.quiet:
+                print(f"📄 {arquivo.name} → {destino_pasta}/")
 
             if not dry_run:
-                shutil.move(str(arquivo), str(novo_caminho))
-                self.arquivos_movidos.append({
-                    "origem": str(arquivo),
-                    "destino": str(novo_caminho),
-                    "data": datetime.now().isoformat()
-                })
+                if mover_para_lixeira and SEND2TRASH_AVAILABLE:
+                    # Move para lixeira (não organiza, só deleta de forma segura)
+                    send2trash.send2trash(str(arquivo))
+                else:
+                    # Organiza normalmente
+                    shutil.move(str(arquivo), str(novo_caminho))
+                    self.arquivos_movidos.append({
+                        "origem": str(arquivo),
+                        "destino": str(novo_caminho),
+                        "hash": hash_arquivo,
+                        "data": datetime.now().isoformat()
+                    })
 
-        if not dry_run:
+        if not dry_run and not mover_para_lixeira:
             self._salvar_log()
-            print(f"\n✅ Organização concluída! {len(arquivos)} arquivos organizados.")
-            print(f"📝 Log salvo em: {self.log_file}")
-        else:
-            print(f"\n🔍 Simulação concluída! {len(arquivos)} arquivos seriam movidos.")
+            if not self.quiet:
+                print(f"\n✅ Organização concluída! {len(arquivos)} arquivos processados.")
+                print(f"📝 Log salvo em: {self.log_file}")
+
+                # Mostrar estatísticas
+                stats = self._contar_arquivos_por_pasta()
+                if stats:
+                    print("\n📊 Estatísticas por pasta:")
+                    for pasta, count in sorted(stats.items()):
+                        print(f"  📁 {pasta}: {count} arquivo(s)")
+
+            # Notificação desktop (se disponível)
+            if PLYER_AVAILABLE and not self.quiet:
+                self._notificar(f"{len(self.arquivos_movidos)} arquivos organizados com sucesso!")
+
+        elif dry_run:
+            if not self.quiet:
+                print(f"\n🔍 Simulação concluída! {len(arquivos)} arquivos seriam processados.")
+
+        elif mover_para_lixeira:
+            if not self.quiet:
+                print(f"\n🗑️ {len(arquivos)} arquivos movidos para a lixeira.")
 
     def _salvar_log(self):
         """Salva log das operações para possível undo"""
@@ -111,6 +236,10 @@ class OrganizadorDownloads:
             "arquivos": self.arquivos_movidos
         })
 
+        # Manter apenas últimas 10 operações no log
+        if len(historico) > 10:
+            historico = historico[-10:]
+
         with open(self.log_file, 'w') as f:
             json.dump(historico, f, indent=2)
 
@@ -120,23 +249,27 @@ class OrganizadorDownloads:
             with open(self.log_file, 'r') as f:
                 historico = json.load(f)
         except FileNotFoundError:
-            print("❌ Nenhum log encontrado. Nada para desfazer.")
+            if not self.quiet:
+                print("❌ Nenhum log encontrado. Nada para desfazer.")
             return
 
         if not historico:
-            print("❌ Histórico vazio.")
+            if not self.quiet:
+                print("❌ Histórico vazio.")
             return
 
         if num_operacao == -1:
             operacao = historico[-1]  # Última
         else:
             if num_operacao >= len(historico):
-                print(f"❌ Operação {num_operacao} não existe. Total: {len(historico)}")
+                if not self.quiet:
+                    print(f"❌ Operação {num_operacao} não existe. Total: {len(historico)}")
                 return
             operacao = historico[num_operacao]
 
-        print(f"\n↩️ Desfazendo operação de {operacao['timestamp']}")
-        print("=" * 50)
+        if not self.quiet:
+            print(f"\n↩️ Desfazendo operação de {operacao['timestamp']}")
+            print("=" * 50)
 
         for item in operacao['arquivos']:
             destino = Path(item['destino'])
@@ -144,11 +277,14 @@ class OrganizadorDownloads:
 
             if destino.exists():
                 shutil.move(str(destino), str(origem_original))
-                print(f"↩️ {destino.name} → {origem_original.parent}")
+                if not self.quiet:
+                    print(f"↩️ {destino.name} → {origem_original.parent}")
             else:
-                print(f"⚠️ Arquivo não encontrado: {destino.name}")
+                if not self.quiet:
+                    print(f"⚠️ Arquivo não encontrado: {destino.name}")
 
-        print("\n✅ Desfeito com sucesso!")
+        if not self.quiet:
+            print("\n✅ Desfeito com sucesso!")
 
 
 def main():
@@ -160,6 +296,9 @@ Exemplos:
   %(prog)s                    # Organiza a pasta Downloads padrão
   %(prog)s ~/Downloads        # Organiza uma pasta específica
   %(prog)s --dry-run          # Simulação (não move nada)
+  %(prog)s --quiet            # Modo silencioso (sem prints)
+  %(prog)s --lixeira          # Move arquivos para lixeira
+  %(prog)s --com-data         # Adiciona data nos nomes dos arquivos
   %(prog)s --undo             # Desfaz a última organização
         """
     )
@@ -186,7 +325,19 @@ Exemplos:
     parser.add_argument(
         "--lixeira",
         action="store_true",
-        help="(opcional) Move para lixeira ao invés de organizar"
+        help="Move para lixeira ao invés de organizar"
+    )
+
+    parser.add_argument(
+        "--com-data",
+        action="store_true",
+        help="Adiciona data de modificação no nome dos arquivos"
+    )
+
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Modo silencioso (sem prints na tela)"
     )
 
     args = parser.parse_args()
@@ -196,7 +347,13 @@ Exemplos:
     if args.undo:
         organizador.desfazer()
     else:
-        organizador.organizar(args.pasta, dry_run=args.dry_run, mover_para_lixeira=args.lixeira)
+        organizador.organizar(
+            args.pasta,
+            dry_run=args.dry_run,
+            mover_para_lixeira=args.lixeira,
+            usar_data=args.com_data,
+            quiet=args.quiet
+        )
 
 
 if __name__ == "__main__":
