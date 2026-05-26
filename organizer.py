@@ -14,12 +14,14 @@ from datetime import datetime
 
 try:
     from plyer import notification
+
     PLYER_AVAILABLE = True
 except ImportError:
     PLYER_AVAILABLE = False
 
 try:
     import send2trash
+
     SEND2TRASH_AVAILABLE = True
 except ImportError:
     SEND2TRASH_AVAILABLE = False
@@ -34,6 +36,7 @@ class OrganizadorDownloads:
         self.log_file = "organizador_log.json"
         self.historico_movimentacoes = []
         self.modo_silencioso = False
+        self.cache_hashes = {}
 
     def _get_pasta_destino(self, extensao):
         extensao = extensao.lower()
@@ -43,11 +46,17 @@ class OrganizadorDownloads:
         return "Outros"
 
     def _hash_md5(self, arquivo, limite_kb=1024):
+        caminho = str(arquivo)
+        if caminho in self.cache_hashes:
+            return self.cache_hashes[caminho]
+
         hash_md5 = hashlib.md5()
         try:
             with open(arquivo, 'rb') as f:
                 hash_md5.update(f.read(limite_kb * 1024))
-            return hash_md5.hexdigest()
+            resultado = hash_md5.hexdigest()
+            self.cache_hashes[caminho] = resultado
+            return resultado
         except (IOError, OSError):
             return None
 
@@ -94,7 +103,8 @@ class OrganizadorDownloads:
         with open(self.log_file, 'w') as f:
             json.dump(historico, f, indent=2)
 
-    def organizar(self, pasta, dry_run=False, mover_lixeira=False, adicionar_data=False, quiet=False):
+    def organizar(self, pasta, dry_run=False, mover_lixeira=False,
+                  adicionar_data=False, incluir_ocultos=False, quiet=False):
         caminho = Path(pasta)
         self.modo_silencioso = quiet
 
@@ -110,16 +120,27 @@ class OrganizadorDownloads:
         if dry_run and not quiet:
             print("Modo simulação - nenhum arquivo será movido\n")
 
-        arquivos = [f for f in caminho.iterdir() if f.is_file()]
+        arquivos = []
+        for f in caminho.iterdir():
+            if not f.is_file():
+                continue
+            if not incluir_ocultos and f.name.startswith('.'):
+                continue
+            arquivos.append(f)
 
         if not arquivos:
             if not quiet:
                 print("Nenhum arquivo para organizar.")
             return
 
+        total = len(arquivos)
         stats = {}
+        mostrar_progresso = total > 10 and not quiet and not dry_run
 
-        for arquivo in arquivos:
+        for i, arquivo in enumerate(arquivos, 1):
+            if mostrar_progresso:
+                print(f"[{i}/{total}] ", end="")
+
             extensao = arquivo.suffix
             pasta_destino = self._get_pasta_destino(extensao)
             destino_path = caminho / pasta_destino
@@ -149,7 +170,9 @@ class OrganizadorDownloads:
                 novo_caminho = destino_path / f"{nome_base}_{contador}{ext}"
                 contador += 1
 
-            if not quiet:
+            if not quiet and not mostrar_progresso:
+                print(f"{arquivo.name} → {pasta_destino}/")
+            elif mostrar_progresso:
                 print(f"{arquivo.name} → {pasta_destino}/")
 
             if not dry_run:
@@ -173,6 +196,8 @@ class OrganizadorDownloads:
                     for nome, qtd in sorted(stats.items()):
                         print(f"  {nome}: {qtd} arquivo(s)")
             self._notificar(f"{len(self.historico_movimentacoes)} arquivos organizados")
+        elif dry_run and not quiet:
+            print(f"\nSimulação concluída. {total} arquivos seriam processados.")
 
     def desfazer(self, quiet=False):
         self.modo_silencioso = quiet
@@ -216,6 +241,7 @@ def main():
     parser.add_argument("--undo", action="store_true", help="Desfazer última organização")
     parser.add_argument("--lixeira", action="store_true", help="Mover para lixeira")
     parser.add_argument("--data", action="store_true", help="Adicionar data ao nome")
+    parser.add_argument("--ocultos", action="store_true", help="Incluir arquivos ocultos")
     parser.add_argument("--quiet", action="store_true", help="Modo silencioso")
 
     args = parser.parse_args()
@@ -230,6 +256,7 @@ def main():
             dry_run=args.dry_run,
             mover_lixeira=args.lixeira,
             adicionar_data=args.data,
+            incluir_ocultos=args.ocultos,
             quiet=args.quiet
         )
 
