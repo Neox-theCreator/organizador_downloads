@@ -1,0 +1,15 @@
+{
+  "extensoes": {
+    "Imagens": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp"],
+    "Documentos": [".pdf", ".docx", ".doc", ".txt", ".md", ".rtf", ".odt"],
+    "Planilhas": [".xlsx", ".xls", ".csv", ".ods"],
+    "Apresentacoes": [".pptx", ".ppt", ".odp"],
+    "Executaveis": [".exe", ".msi", ".appimage", ".sh", ".bat"],
+    "Compactados": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"],
+    "Audios": [".mp3", ".wav", ".flac", ".aac", ".ogg"],
+    "Videos": [".mp4", ".avi", ".mkv", ".mov", ".wmv"],
+    "Codigo": [".py", ".js", ".html", ".css", ".json", ".xml", ".c", ".cpp", ".java"],
+    "Outros": []
+  },
+  "pastas_ignorar": ["Imagens", "Documentos", "Planilhas", "Apresentacoes", "Executaveis", "Compactados", "Audios", "Videos", "Codigo", "Outros"]
+}
