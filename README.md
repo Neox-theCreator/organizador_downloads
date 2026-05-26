@@ -13,5 +13,5 @@ Script em Python que organiza automaticamente sua pasta de Downloads (ou qualque
 ## 🛠️ Instalação
 
 ```bash
-git clone https://github.com/seuusuario/organizador-downloads.git
+git clone https://github.com/Neox-theCreator/organizador-downloads.git
 cd organizador-downloads
